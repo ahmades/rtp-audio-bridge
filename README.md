@@ -14,7 +14,7 @@ Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in the same d
 - On the receiver: GStreamer `audioconvert` and `filesink` elements
 - The `mkfifo` utility on the receiver
 
-The sender and receiver must be able to exchange UDP traffic on the selected port. The scripts also ping their configured addresses once before starting. ICMP echo must be permitted; a firewall that blocks ping can cause startup to fail even when the RTP/UDP path would otherwise work.
+The sender and receiver must be able to exchange UDP traffic on the selected port. The receiver checks that the local UDP port is not already in use before starting. This does not verify remote firewall rules or prove that packets can reach the receiver. The scripts also ping their configured addresses once before starting. ICMP echo must be permitted; a firewall that blocks ping can cause startup to fail even when the RTP/UDP path would otherwise work.
 
 ## Usage
 

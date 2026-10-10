@@ -93,7 +93,7 @@ function validate_parameters() {
 function check_dependencies() {
     local command
 
-    for command in getopt ip awk pactl gst-launch-1.0 gst-inspect-1.0 mkfifo ping; do
+    for command in getopt ip awk pactl gst-launch-1.0 gst-inspect-1.0 mkfifo ping ss; do
         if ! command -v "$command" >/dev/null 2>&1; then
             echo "Error: '$command' is not installed." >&2
             exit 1
@@ -134,6 +134,21 @@ function resolve_local_interface() {
     LOCAL_IFNAME="$(local_ipv4_interface "$DESTINATION_IP")"
     if [[ -z "$LOCAL_IFNAME" ]]; then
         echo "Error: receiver IP is not assigned to a local interface: $DESTINATION_IP" >&2
+        exit 1
+    fi
+}
+
+function check_udp_port_available() {
+    local sockets
+
+    if ! sockets="$(ss -H -lun "sport = :$PORT")"; then
+        echo "Error: could not check whether UDP port $PORT is available." >&2
+        exit 1
+    fi
+
+    if [[ -n "$sockets" ]]; then
+        echo "Error: UDP port $PORT is already in use on this machine:" >&2
+        echo "$sockets" >&2
         exit 1
     fi
 }
@@ -242,6 +257,7 @@ function main() {
     check_dependencies
     check_gstreamer_elements
     resolve_local_interface
+    check_udp_port_available
     check_reachable_ips
     check_playback_sink
     configure_cleanup
