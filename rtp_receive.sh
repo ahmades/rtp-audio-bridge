@@ -7,7 +7,7 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rtp_common.sh"
 function usage() {
     echo "Usage: $0 [-d <receiver_ip>] -p <port> [-s <expected_sender_ip>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>]"
     echo
-    echo "Receives the sender's RTP/L16 audio without restarting PipeWire."
+    echo "Receives the sender's Opus RTP audio without restarting PipeWire."
     echo "Options:"
     echo "  -d <receiver_ip>  This machine's local IPv4 address (auto-detected if omitted)"
     echo "  -p <port>         RTP UDP port to receive (mandatory)"
@@ -108,7 +108,7 @@ function check_dependencies() {
 function check_gstreamer_elements() {
     local element
 
-    for element in udpsrc rtpjitterbuffer rtpL16depay filesink; do
+    for element in udpsrc rtpjitterbuffer rtpopusdepay opusdec audioconvert filesink; do
         if ! gst-inspect-1.0 "$element" >/dev/null 2>&1; then
             echo "Error: GStreamer element '$element' is unavailable." >&2
             exit 1
@@ -183,9 +183,12 @@ function create_runtime_fifo() {
 function start_gstreamer_receiver() {
     gst-launch-1.0 -q \
         udpsrc address="$DESTINATION_IP" port="$PORT" \
-            caps='application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)L16,encoding-params=(string)2,channels=(int)2,payload=(int)127' \
+            caps='application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)96' \
         ! rtpjitterbuffer latency="$JITTER_MS" drop-on-latency=true \
-        ! rtpL16depay \
+        ! rtpopusdepay \
+        ! opusdec \
+        ! audioconvert \
+        ! audio/x-raw,format=S16BE,rate=48000,channels=2 \
         ! filesink location="$FIFO" &
     GST_PID=$!
 }

@@ -1,6 +1,6 @@
 # RTP Audio over UDP
 
-These Bash scripts send a PulseAudio/PipeWire capture source as RTP/L16 audio and expose the received stream as a local PulseAudio/PipeWire source. The receiver uses GStreamer to receive and depayload RTP without restarting PipeWire.
+These Bash scripts send a PulseAudio/PipeWire capture source as Opus-encoded RTP audio and expose the decoded stream as a local PulseAudio/PipeWire source. GStreamer handles capture, encoding, RTP packetization, reception, and decoding without restarting PipeWire.
 
 Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in the same directory. The scripts source the common helper from their own location, so they can be launched from another working directory.
 
@@ -9,7 +9,8 @@ Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in the same d
 - Bash
 - A running PulseAudio-compatible server, such as `pipewire-pulse`
 - `pactl`, `ip`, `awk`, and `ping`
-- On the receiver: `gst-launch-1.0`, `gst-inspect-1.0`, and the GStreamer elements `udpsrc`, `rtpjitterbuffer`, `rtpL16depay`, and `filesink`
+- On both machines: `gst-launch-1.0`, `gst-inspect-1.0`, and GStreamer plugins providing `pulsesrc`, `opusenc`, `rtpopuspay`, `udpsink`, `udpsrc`, `rtpjitterbuffer`, `rtpopusdepay`, and `opusdec`
+- On the receiver: GStreamer `audioconvert` and `filesink` elements
 - The `mkfifo` utility on the receiver
 
 The sender and receiver must be able to exchange UDP traffic on the selected port. The scripts also ping their configured addresses once before starting. ICMP echo must be permitted; a firewall that blocks ping can cause startup to fail even when the RTP/UDP path would otherwise work.
@@ -19,14 +20,15 @@ The sender and receiver must be able to exchange UDP traffic on the selected por
 ### Sender
 
 ```text
-rtp_send.sh -i <pulse_source> -d <receiver_ip> -p <port> [-s <sender_ip>] [-m <mtu>]
+rtp_send.sh -i <pulse_source> -d <receiver_ip> -p <port> [-s <sender_ip>] [-m <mtu>] [-b <bitrate>]
 ```
 
 - `-i`: capture source name from `pactl list short sources` (required).
 - `-d`: receiver IPv4 address (required).
 - `-p`: RTP UDP port, from 1 to 65535 (required).
 - `-s`: sender's local IPv4 address. Auto-detected from the route to the receiver if omitted.
-- `-m`: optional RTP MTU, from 256 to 9000. Without it, the module default is used.
+- `-m`: maximum RTP packet size in bytes, from 256 to 9000 (default: 1200).
+- `-b`: Opus target bitrate in bits per second, from 6000 to 512000 (default: 64000).
 - `-h`: show help.
 
 ### Receiver
@@ -79,10 +81,10 @@ The sender chooses its local IPv4 address from the route to the receiver when `-
 ./rtp_send.sh -i '<capture-source-name>' -s 192.78.2.10 -d 198.51.100.20 -p 4010
 ```
 
-The sender's `-d` address must be the receiver machine's IPv4 address. The receiver's `-d`, when supplied, must be an IPv4 address assigned locally to the receiver.
+The sender's `-d` address must be the receiver machine's IPv4 address. The receiver's `-d`, when supplied, must be an IPv4 address assigned locally to the receiver. Both ends use stereo audio at 48 kHz and RTP payload type 96. The Opus bitrate is configurable on the sender; `-m` limits RTP packet size and does not set the audio bitrate.
 
 ## Stop and Troubleshoot
 
-Press Ctrl-C in either terminal to stop the script. The sender unloads its RTP module. The receiver stops GStreamer, unloads its source and optional loopback modules, and removes its temporary FIFO directory.
+Press Ctrl-C in either terminal to stop the script. The sender stops its GStreamer pipeline. The receiver stops GStreamer, unloads its source and optional loopback modules, and removes its temporary FIFO directory.
 
 If startup fails, verify that the chosen source or sink exists, that the PulseAudio-compatible server is running, that the receiver address is assigned locally, that ICMP ping is permitted, and that UDP traffic on the selected port can pass between the machines. The receiver does not filter packets by sender IP; use a firewall if source filtering is required.
