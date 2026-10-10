@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rtp_common.sh"
+
+function usage() {
+    echo "Usage: $0 [-d <receiver_ip>] -p <port> [-s <expected_sender_ip>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>]"
+    echo
+    echo "Receives the sender's RTP/L16 audio without restarting PipeWire."
+    echo "Options:"
+    echo "  -d <receiver_ip>  This machine's local IPv4 address (auto-detected if omitted)"
+    echo "  -p <port>         RTP UDP port to receive (mandatory)"
+    echo "  -s <sender_ip>    Expected sender address, shown for reference only"
+    echo "  -o <sink>         Optional PulseAudio/PipeWire playback sink name"
+    echo "  -j <jitter_ms>    RTP jitter buffer in milliseconds (default: 100)"
+    echo "  -l <loopback_ms>  Playback loopback latency in milliseconds (default: 50)"
+    echo "  -h                Show this help"
+    echo
+    echo "The RTP source filter is not applied; restrict UDP access with your firewall if needed."
+    exit "${1:-0}"
+}
+
+SOURCE_IP=""
+DESTINATION_IP=""
+PORT=""
+JITTER_MS=100
+LOOPBACK_MS=50
+PLAYBACK_SINK=""
+LOCAL_IFNAME=""
+RUNTIME_DIR=""
+FIFO=""
+SOURCE_NAME=""
+SOURCE_MODULE_ID=""
+LOOPBACK_MODULE_ID=""
+GST_PID=""
+
+function parse_arguments() {
+    local opt
+
+    while getopts ":s:d:p:o:j:l:h" opt; do
+        case "$opt" in
+            s) SOURCE_IP="$OPTARG" ;;
+            d) DESTINATION_IP="$OPTARG" ;;
+            p) PORT="$OPTARG" ;;
+            o) PLAYBACK_SINK="$OPTARG" ;;
+            j) JITTER_MS="$OPTARG" ;;
+            l) LOOPBACK_MS="$OPTARG" ;;
+            h) usage 0 ;;
+            :)
+                echo "Error: option -$OPTARG requires an argument." >&2
+                usage 1
+                ;;
+            \?)
+                echo "Error: invalid option -$OPTARG." >&2
+                usage 1
+                ;;
+        esac
+    done
+}
+
+function validate_parameters() {
+    [[ -n "$PORT" ]] || { echo "Error: -p <port> is mandatory." >&2; usage 1; }
+
+    if [[ -n "$SOURCE_IP" ]] && ! is_ipv4 "$SOURCE_IP"; then
+        echo "Error: invalid sender IPv4 address: $SOURCE_IP" >&2
+        exit 1
+    fi
+
+    if [[ -n "$DESTINATION_IP" ]] && ! is_ipv4 "$DESTINATION_IP"; then
+        echo "Error: invalid receiver IPv4 address: $DESTINATION_IP" >&2
+        exit 1
+    fi
+
+    if ! [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$PORT < 1 || 10#$PORT > 65535 )); then
+        echo "Error: invalid port: $PORT" >&2
+        exit 1
+    fi
+    PORT=$((10#$PORT))
+
+    if ! [[ "$JITTER_MS" =~ ^[0-9]+$ ]] || (( JITTER_MS < 1 || JITTER_MS > 2000 )); then
+        echo "Error: jitter buffer must be an integer from 1 to 2000 ms: $JITTER_MS" >&2
+        exit 1
+    fi
+
+    if ! [[ "$LOOPBACK_MS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        echo "Error: invalid loopback latency: $LOOPBACK_MS" >&2
+        exit 1
+    fi
+}
+
+function check_dependencies() {
+    local command
+
+    for command in ip awk pactl gst-launch-1.0 gst-inspect-1.0 mkfifo ping; do
+        if ! command -v "$command" >/dev/null 2>&1; then
+            echo "Error: '$command' is not installed." >&2
+            exit 1
+        fi
+    done
+
+    if ! pactl info >/dev/null 2>&1; then
+        echo "Error: cannot connect to the PulseAudio-compatible server (pipewire-pulse)." >&2
+        exit 1
+    fi
+}
+
+function check_gstreamer_elements() {
+    local element
+
+    for element in udpsrc rtpjitterbuffer rtpL16depay filesink; do
+        if ! gst-inspect-1.0 "$element" >/dev/null 2>&1; then
+            echo "Error: GStreamer element '$element' is unavailable." >&2
+            exit 1
+        fi
+    done
+}
+
+function resolve_local_interface() {
+    if [[ -z "$DESTINATION_IP" ]]; then
+        DESTINATION_IP="$(local_ipv4_for_peer "$SOURCE_IP")" || {
+            echo "Error: could not determine the local receiver IP from the routing table." >&2
+            exit 1
+        }
+        echo "Using local receiver IP: $DESTINATION_IP"
+    fi
+
+    if ! is_ipv4 "$DESTINATION_IP"; then
+        echo "Error: invalid receiver IPv4 address: $DESTINATION_IP" >&2
+        exit 1
+    fi
+
+    LOCAL_IFNAME="$(local_ipv4_interface "$DESTINATION_IP")"
+    if [[ -z "$LOCAL_IFNAME" ]]; then
+        echo "Error: receiver IP is not assigned to a local interface: $DESTINATION_IP" >&2
+        exit 1
+    fi
+}
+
+function check_reachable_ips() {
+    check_ip_reachable "$DESTINATION_IP" "$SOURCE_IP"
+}
+
+function check_playback_sink() {
+    if [[ -n "$PLAYBACK_SINK" ]] && ! pactl list short sinks | awk -v sink="$PLAYBACK_SINK" '$2 == sink { found = 1 } END { exit !found }'; then
+        echo "Error: playback sink not found: $PLAYBACK_SINK" >&2
+        echo "Available sinks:"
+        pactl list short sinks
+        exit 1
+    fi
+}
+
+function configure_cleanup() {
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+
+function cleanup() {
+    trap - EXIT INT TERM
+    if [[ -n "$GST_PID" ]]; then
+        kill "$GST_PID" >/dev/null 2>&1 || true
+        wait "$GST_PID" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$LOOPBACK_MODULE_ID" ]]; then
+        pactl unload-module "$LOOPBACK_MODULE_ID" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$SOURCE_MODULE_ID" ]]; then
+        pactl unload-module "$SOURCE_MODULE_ID" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$RUNTIME_DIR" ]]; then
+        rm -rf -- "$RUNTIME_DIR"
+    fi
+}
+
+function create_runtime_fifo() {
+    RUNTIME_DIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/rta-rtp-receiver.XXXXXX")"
+    FIFO="$RUNTIME_DIR/audio.pcm"
+	SOURCE_NAME="rtp_receiver_${DESTINATION_IP}:${PORT}_sender_${SOURCE_IP}"
+    mkfifo "$FIFO"
+}
+
+function start_gstreamer_receiver() {
+    gst-launch-1.0 -q \
+        udpsrc address="$DESTINATION_IP" port="$PORT" \
+            caps='application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)L16,encoding-params=(string)2,channels=(int)2,payload=(int)127' \
+        ! rtpjitterbuffer latency="$JITTER_MS" drop-on-latency=true \
+        ! rtpL16depay \
+        ! filesink location="$FIFO" &
+    GST_PID=$!
+}
+
+function load_pipe_source() {
+    SOURCE_MODULE_ID="$(pactl load-module module-pipe-source \
+        "file=$FIFO" \
+        "source_name=$SOURCE_NAME" \
+        "format=s16be" \
+        "rate=48000" \
+        "channels=2")"
+}
+
+function load_playback_loopback() {
+    if [[ -n "$PLAYBACK_SINK" ]]; then
+        LOOPBACK_MODULE_ID="$(pactl load-module module-loopback \
+            "source=$SOURCE_NAME" \
+            "sink=$PLAYBACK_SINK" \
+            "latency_msec=$LOOPBACK_MS")"
+    fi
+}
+
+function show_receiver_status() {
+    echo "Creating live RTP source on $DESTINATION_IP:$PORT (interface $LOCAL_IFNAME)..."
+    echo "RTP source: $SOURCE_NAME (module $SOURCE_MODULE_ID)"
+    echo "Jitter buffer: ${JITTER_MS} ms (drops stale data to stay bounded)"
+    if [[ -n "$SOURCE_IP" ]]; then
+        echo "Expected sender: $SOURCE_IP (informational only; not filtered)"
+    fi
+
+    if [[ -n "$PLAYBACK_SINK" ]]; then
+        echo "Playback sink: $PLAYBACK_SINK (loopback latency ${LOOPBACK_MS} ms)"
+    else
+        echo "Select $SOURCE_NAME as an input source in an audio application."
+    fi
+    echo "Press Ctrl-C to unload the source and stop receiving."
+}
+
+function wait_for_receiver() {
+    while kill -0 "$GST_PID" 2>/dev/null; do
+        sleep 1
+    done
+
+    wait "$GST_PID"
+}
+
+function main() {
+    parse_arguments "$@"
+    validate_parameters
+    check_dependencies
+    check_gstreamer_elements
+    resolve_local_interface
+    check_reachable_ips
+    check_playback_sink
+    configure_cleanup
+    create_runtime_fifo
+    start_gstreamer_receiver
+    load_pipe_source
+    load_playback_loopback
+    show_receiver_status
+    wait_for_receiver
+}
+
+main "$@"
