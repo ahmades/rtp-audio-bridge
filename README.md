@@ -46,7 +46,7 @@ The receiver also accepts the corresponding short options (`-p`, `-d`, `-s`, `-o
 - `-d`: receiver's local IPv4 address. Auto-detected from the route to `-s`, or the default route if `-s` is omitted.
 - `-s`: expected sender IPv4 address. Used for address selection and reachability checking only; it does not filter incoming RTP packets.
 - `-o`: optional playback sink name from `pactl list short sinks`. When supplied, a loopback connects the RTP source to this sink.
-- `-j`: jitter-buffer latency in milliseconds, from 1 to 2000 (default: 100).
+- `-j`: jitter-buffer latency in milliseconds, from 1 to 2000 (default: 200).
 - `-l`: loopback latency in milliseconds (default: 50).
 - `-h`: show help.
 

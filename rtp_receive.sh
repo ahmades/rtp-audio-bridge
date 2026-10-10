@@ -14,7 +14,7 @@ function usage() {
     echo "  -p, --port <port>            RTP UDP port to receive (mandatory)"
     echo "  -s, --sender-ip <ip>         Expected sender address, informational only"
     echo "  -o, --playback-sink <name>   Optional PulseAudio/PipeWire playback sink"
-    echo "  -j, --jitter <ms>            RTP jitter buffer (default: 100)"
+    echo "  -j, --jitter <ms>            RTP jitter buffer (default: 200)"
     echo "  -l, --loopback <ms>          Playback loopback latency (default: 50)"
     echo "  -h, --help                   Show this help"
     echo
@@ -25,7 +25,7 @@ function usage() {
 SOURCE_IP=""
 DESTINATION_IP=""
 PORT=""
-JITTER_MS=100
+JITTER_MS=200
 LOOPBACK_MS=50
 PLAYBACK_SINK=""
 LOCAL_IFNAME=""
@@ -185,7 +185,7 @@ function start_gstreamer_receiver() {
     gst-launch-1.0 -q \
         udpsrc address="$DESTINATION_IP" port="$PORT" \
             caps='application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)96' \
-        ! rtpjitterbuffer latency="$JITTER_MS" drop-on-latency=true \
+        ! rtpjitterbuffer latency="$JITTER_MS" drop-on-latency=true do-lost=true \
         ! rtpopusdepay \
         ! opusdec \
         ! audioconvert \
