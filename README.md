@@ -1,8 +1,8 @@
 # RTP Audio over UDP
 
-These Bash scripts send a PulseAudio/PipeWire capture source as Opus-encoded RTP audio and expose the decoded stream as a local PulseAudio/PipeWire source. GStreamer handles capture, encoding, RTP packetization, reception, and decoding without restarting PipeWire.
+These Bash scripts send a PulseAudio/PipeWire capture source as Opus-encoded RTP audio and expose the decoded stream as a local PulseAudio/PipeWire source. GStreamer handles capture, encoding, RTP packetization, reception, and decoding without restarting PipeWire. The transport scripts live in `src/`; `gui/rtp_gui.sh` provides an optional YAD form interface.
 
-Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in the same directory. The scripts source the common helper from their own location, so they can be launched from another working directory.
+Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in `src/`. The scripts source the common helper from their own location, so they can be launched from another working directory.
 
 ## Requirements
 
@@ -10,18 +10,24 @@ Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in the same d
 - GNU `getopt` (provided by util-linux)
 - A running PulseAudio-compatible server, such as `pipewire-pulse`
 - `pactl`, `ip`, `awk`, and `ping`
+- `ss` on the receiver, to check local UDP port availability
 - On both machines: `gst-launch-1.0`, `gst-inspect-1.0`, and GStreamer plugins providing `pulsesrc`, `opusenc`, `rtpopuspay`, `udpsink`, `udpsrc`, `rtpjitterbuffer`, `rtpopusdepay`, and `opusdec`
 - On the receiver: GStreamer `audioconvert` and `filesink` elements
 - The `mkfifo` utility on the receiver
+- Optional GUI: YAD (`yad`) and a graphical desktop session
 
 The sender and receiver must be able to exchange UDP traffic on the selected port. The receiver checks that the local UDP port is not already in use before starting. This does not verify remote firewall rules or prove that packets can reach the receiver. The scripts also ping their configured addresses once before starting. ICMP echo must be permitted; a firewall that blocks ping can cause startup to fail even when the RTP/UDP path would otherwise work.
 
 ## Usage
 
+### GUI
+
+Run `./gui/rtp_gui.sh` from the repository directory. Choose Sender or Receiver, fill in the form, and press Start. The session window shows script output; Stop or Close sends a termination signal so the script can clean up its GStreamer and PipeWire resources. Install YAD from your distribution's package manager to use the GUI. The command-line scripts remain usable without YAD.
+
 ### Sender
 
 ```text
-rtp_send.sh --source <pulse_source> --receiver-ip <ip> --port <port> [--sender-ip <ip>] [--mtu <bytes>] [--bitrate <bits/s>]
+src/rtp_send.sh --source <pulse_source> --receiver-ip <ip> --port <port> [--sender-ip <ip>] [--mtu <bytes>] [--bitrate <bits/s>]
 ```
 
 The sender also accepts the corresponding short options (`-i`, `-d`, `-p`, `-s`, `-m`, and `-b`). Long options accept either `--option value` or `--option=value`.
@@ -37,7 +43,7 @@ The sender also accepts the corresponding short options (`-i`, `-d`, `-p`, `-s`,
 ### Receiver
 
 ```text
-rtp_receive.sh --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>]
+src/rtp_receive.sh --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>]
 ```
 
 The receiver also accepts the corresponding short options (`-p`, `-d`, `-s`, `-o`, `-j`, and `-l`). Long options accept either `--option value` or `--option=value`.
@@ -53,10 +59,10 @@ The receiver also accepts the corresponding short options (`-p`, `-d`, `-s`, `-o
 The receiver creates a PulseAudio/PipeWire source using this name pattern:
 
 ```text
-rtp_receiver_${DESTINATION_IP}:${PORT}_sender_${SOURCE_IP}
+rtp_receiver_${DESTINATION_IP}:${PORT}[_sender_${SOURCE_IP}]
 ```
 
-For example, receiver address `198.51.100.20`, port `4010`, and sender address `192.0.2.10` produce `rtp_receiver_198.51.100.20:4010_sender_192.0.2.10`. If `-s` is omitted, the sender-address portion is empty. Select this source as an input in an audio application when `-o` is not used.
+For example, receiver address `198.51.100.20` and port `4010` produce `rtp_receiver_198.51.100.20:4010`. If sender address `192.0.2.10` is supplied with `-s`, the name is `rtp_receiver_198.51.100.20:4010_sender_192.0.2.10`. Select this source as an input in an audio application when `-o` is not used.
 
 ## How to Run
 
@@ -65,31 +71,31 @@ Start the receiver first. Replace the example port and addresses with values for
 The addresses below are reserved for documentation and are not routable hosts. Replace them with your machines' real local and remote IPv4 addresses before running the commands.
 
 ```bash
-./rtp_receive.sh -p 4010 -s 192.78.2.10 -l 20 -j 300
+./src/rtp_receive.sh -p 4010 -s 192.78.2.10 -l 20 -j 300
 ```
 
 Here `-s` is the sender's IPv4 address. The receiver chooses its local destination address from the route to that sender. If `-s` is omitted too, it uses the local IPv4 address selected by the default route:
 
 ```bash
-./rtp_receive.sh -p 4010
+./src/rtp_receive.sh -p 4010
 ```
 
 Then start the sender on the other machine:
 
 ```bash
-./rtp_send.sh -i '<capture-source-name>' -d 198.51.100.20 -p 4010
+./src/rtp_send.sh -i '<capture-source-name>' -d 198.51.100.20 -p 4010
 ```
 
 The sender chooses its local IPv4 address from the route to the receiver when `-s` is omitted. Supply `-s <sender-ip>` to select a particular local interface address explicitly:
 
 ```bash
-./rtp_send.sh -i '<capture-source-name>' -s 192.78.2.10 -d 198.51.100.20 -p 4010
+./src/rtp_send.sh -i '<capture-source-name>' -s 192.78.2.10 -d 198.51.100.20 -p 4010
 ```
 
 The sender's `-d` address must be the receiver machine's IPv4 address. The receiver's `-d`, when supplied, must be an IPv4 address assigned locally to the receiver. Both ends use stereo audio at 48 kHz and RTP payload type 96. The Opus bitrate is configurable on the sender; `-m` limits RTP packet size and does not set the audio bitrate.
 
 ## Stop and Troubleshoot
 
-Press Ctrl-C in either terminal to stop the script. The sender stops its GStreamer pipeline. The receiver stops GStreamer, unloads its source and optional loopback modules, and removes its temporary FIFO directory.
+In the GUI, press Stop or Close in the session window. From a terminal, press Ctrl-C. The sender stops its GStreamer pipeline. The receiver stops GStreamer, unloads its source and optional loopback modules, and removes its temporary FIFO directory.
 
 If startup fails, verify that the chosen source or sink exists, that the PulseAudio-compatible server is running, that the receiver address is assigned locally, that ICMP ping is permitted, and that UDP traffic on the selected port can pass between the machines. The receiver does not filter packets by sender IP; use a firewall if source filtering is required.

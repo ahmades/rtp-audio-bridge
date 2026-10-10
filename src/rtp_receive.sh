@@ -192,7 +192,10 @@ function cleanup() {
 function create_runtime_fifo() {
     RUNTIME_DIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/rta-rtp-receiver.XXXXXX")"
     FIFO="$RUNTIME_DIR/audio.pcm"
-	SOURCE_NAME="rtp_receiver_${DESTINATION_IP}:${PORT}_sender_${SOURCE_IP}"
+    SOURCE_NAME="rtp_receiver_${DESTINATION_IP}:${PORT}"
+    if [[ -n "$SOURCE_IP" ]]; then
+        SOURCE_NAME+="_sender_${SOURCE_IP}"
+    fi
     mkfifo "$FIFO"
 }
 
@@ -240,7 +243,9 @@ function show_receiver_status() {
     else
         echo "Select $SOURCE_NAME as an input source in an audio application."
     fi
-    echo "Press Ctrl-C to unload the source and stop receiving."
+    if [[ "${RTP_GUI:-0}" != 1 ]]; then
+        echo "Press Ctrl-C to unload the source and stop receiving."
+    fi
 }
 
 function wait_for_receiver() {

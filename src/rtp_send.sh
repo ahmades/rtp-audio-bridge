@@ -185,7 +185,9 @@ function show_sender_status() {
     echo "  Source IP:   $SOURCE_IP"
     echo "  Destination: $DESTINATION_IP:$PORT"
     echo "  Codec:       Opus at $BITRATE bits/s"
-    echo "Press Ctrl-C to stop the GStreamer sender."
+    if [[ "${RTP_GUI:-0}" != 1 ]]; then
+        echo "Press Ctrl-C to stop the GStreamer sender."
+    fi
 }
 
 function wait_for_sender() {
