@@ -22,7 +22,7 @@ The sender and receiver must be able to exchange UDP traffic on the selected por
 
 ### GUI
 
-Run `./gui/rtp_gui.sh` from the repository directory. Choose Sender or Receiver, fill in the form, and press Start. The session window shows script output; Stop or Close sends a termination signal so the script can clean up its GStreamer and PipeWire resources. Install YAD from your distribution's package manager to use the GUI. The command-line scripts remain usable without YAD.
+Run `./gui/rtp_gui.sh` from the repository directory. Choose Sender or Receiver, fill in the form, and press Start. The GUI remembers the last submitted values for each form under `${XDG_CONFIG_HOME:-~/.config}/rtp-audio/`. The session window shows live output and the process exit status. Stop terminates the session and leaves its final log open; Close exits the log window and terminates the session if it is still running. Copy log and Save log are also available. Clipboard copying requires `wl-copy`, `xclip`, or `xsel`; saving uses YAD's file chooser. Install YAD from your distribution's package manager to use the GUI. The command-line scripts remain usable without YAD.
 
 ### Sender
 
@@ -96,6 +96,6 @@ The sender's `-d` address must be the receiver machine's IPv4 address. The recei
 
 ## Stop and Troubleshoot
 
-In the GUI, press Stop or Close in the session window. From a terminal, press Ctrl-C. The sender stops its GStreamer pipeline. The receiver stops GStreamer, unloads its source and optional loopback modules, and removes its temporary FIFO directory.
+In the GUI, press Stop to stop the active session while keeping the final log available, or Close to close the log and stop the session if it is still running. From a terminal, press Ctrl-C. The sender stops its GStreamer pipeline. The receiver stops GStreamer, unloads its source and optional loopback modules, and removes its temporary FIFO directory.
 
 If startup fails, verify that the chosen source or sink exists, that the PulseAudio-compatible server is running, that the receiver address is assigned locally, that ICMP ping is permitted, and that UDP traffic on the selected port can pass between the machines. The receiver does not filter packets by sender IP; use a firewall if source filtering is required.
