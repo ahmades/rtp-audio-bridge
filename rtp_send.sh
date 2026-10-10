@@ -5,16 +5,17 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rtp_common.sh"
 
 function usage() {
-    echo "Usage: $0 -i <pulse_source> [-s <sender_ip>] -d <receiver_ip> -p <port> [-m <mtu>] [-b <bitrate>]"
+    echo "Usage: $0 --source <pulse_source> [--sender-ip <ip>] --receiver-ip <ip> --port <port> [--mtu <bytes>] [--bitrate <bits/s>]"
+    echo "       $0 -i <pulse_source> [-s <sender_ip>] -d <receiver_ip> -p <port> [-m <mtu>] [-b <bitrate>]"
     echo
     echo "Options:"
-    echo "  -i <pulse_source> PulseAudio/PipeWire source name from 'pactl list short sources' (mandatory)"
-    echo "  -s <sender_ip>    This machine's local IPv4 address (auto-detected if omitted)"
-    echo "  -d <receiver_ip>  Receiver machine's IPv4 address (mandatory)"
-    echo "  -p <port>         RTP UDP port (mandatory)"
-    echo "  -m <mtu>          Maximum RTP packet size in bytes (default: 1200)"
-    echo "  -b <bitrate>      Opus bitrate in bits per second (default: 64000)"
-    echo "  -h                Show this help"
+    echo "  -i, --source <name>          PulseAudio/PipeWire source name (mandatory)"
+    echo "  -s, --sender-ip <ip>         Local IPv4 address (auto-detected if omitted)"
+    echo "  -d, --receiver-ip <ip>       Receiver machine's IPv4 address (mandatory)"
+    echo "  -p, --port <port>            RTP UDP port (mandatory)"
+    echo "  -m, --mtu <bytes>            Maximum RTP packet size (default: 1200)"
+    echo "  -b, --bitrate <bits/s>       Opus bitrate (default: 64000)"
+    echo "  -h, --help                   Show this help"
     exit "${1:-0}"
 }
 
@@ -27,25 +28,25 @@ BITRATE=64000
 GST_PID=""
 
 function parse_arguments() {
-    local opt
+    local parsed
 
-    while getopts ":i:s:d:p:m:b:h" opt; do
-        case "$opt" in
-            i) SOURCE="$OPTARG" ;;
-            s) SOURCE_IP="$OPTARG" ;;
-            d) DESTINATION_IP="$OPTARG" ;;
-            p) PORT="$OPTARG" ;;
-            m) MTU="$OPTARG" ;;
-            b) BITRATE="$OPTARG" ;;
-            h) usage 0 ;;
-            :)
-                echo "Error: option -$OPTARG requires an argument." >&2
-                usage 1
-                ;;
-            \?)
-                echo "Error: invalid option -$OPTARG." >&2
-                usage 1
-                ;;
+    if ! parsed=$(getopt -o "i:s:d:p:m:b:h" \
+        -l "source:,sender-ip:,receiver-ip:,port:,mtu:,bitrate:,help" \
+        -- "$@"); then
+        usage 1
+    fi
+    eval set -- "$parsed"
+
+    while true; do
+        case "$1" in
+            -i|--source) SOURCE=$2; shift 2 ;;
+            -s|--sender-ip) SOURCE_IP=$2; shift 2 ;;
+            -d|--receiver-ip) DESTINATION_IP=$2; shift 2 ;;
+            -p|--port) PORT=$2; shift 2 ;;
+            -m|--mtu) MTU=$2; shift 2 ;;
+            -b|--bitrate) BITRATE=$2; shift 2 ;;
+            -h|--help) usage 0 ;;
+            --) shift; break ;;
         esac
     done
 }
@@ -84,7 +85,7 @@ function validate_parameters() {
 function check_dependencies() {
     local command
 
-    for command in pactl ip awk ping gst-launch-1.0 gst-inspect-1.0; do
+    for command in getopt pactl ip awk ping gst-launch-1.0 gst-inspect-1.0; do
         if ! command -v "$command" >/dev/null 2>&1; then
             echo "Error: '$command' is not installed." >&2
             exit 1

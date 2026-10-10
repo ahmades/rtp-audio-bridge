@@ -7,6 +7,7 @@ Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in the same d
 ## Requirements
 
 - Bash
+- GNU `getopt` (provided by util-linux)
 - A running PulseAudio-compatible server, such as `pipewire-pulse`
 - `pactl`, `ip`, `awk`, and `ping`
 - On both machines: `gst-launch-1.0`, `gst-inspect-1.0`, and GStreamer plugins providing `pulsesrc`, `opusenc`, `rtpopuspay`, `udpsink`, `udpsrc`, `rtpjitterbuffer`, `rtpopusdepay`, and `opusdec`
@@ -20,8 +21,10 @@ The sender and receiver must be able to exchange UDP traffic on the selected por
 ### Sender
 
 ```text
-rtp_send.sh -i <pulse_source> -d <receiver_ip> -p <port> [-s <sender_ip>] [-m <mtu>] [-b <bitrate>]
+rtp_send.sh --source <pulse_source> --receiver-ip <ip> --port <port> [--sender-ip <ip>] [--mtu <bytes>] [--bitrate <bits/s>]
 ```
+
+The sender also accepts the corresponding short options (`-i`, `-d`, `-p`, `-s`, `-m`, and `-b`). Long options accept either `--option value` or `--option=value`.
 
 - `-i`: capture source name from `pactl list short sources` (required).
 - `-d`: receiver IPv4 address (required).
@@ -34,8 +37,10 @@ rtp_send.sh -i <pulse_source> -d <receiver_ip> -p <port> [-s <sender_ip>] [-m <m
 ### Receiver
 
 ```text
-rtp_receive.sh -p <port> [-d <receiver_ip>] [-s <sender_ip>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>]
+rtp_receive.sh --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>]
 ```
+
+The receiver also accepts the corresponding short options (`-p`, `-d`, `-s`, `-o`, `-j`, and `-l`). Long options accept either `--option value` or `--option=value`.
 
 - `-p`: RTP UDP port to receive, from 1 to 65535 (required; use the same port as the sender).
 - `-d`: receiver's local IPv4 address. Auto-detected from the route to `-s`, or the default route if `-s` is omitted.

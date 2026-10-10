@@ -5,17 +5,18 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rtp_common.sh"
 
 function usage() {
-    echo "Usage: $0 [-d <receiver_ip>] -p <port> [-s <expected_sender_ip>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>]"
+    echo "Usage: $0 --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>]"
+    echo "       $0 [-d <receiver_ip>] -p <port> [-s <expected_sender_ip>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>]"
     echo
     echo "Receives the sender's Opus RTP audio without restarting PipeWire."
     echo "Options:"
-    echo "  -d <receiver_ip>  This machine's local IPv4 address (auto-detected if omitted)"
-    echo "  -p <port>         RTP UDP port to receive (mandatory)"
-    echo "  -s <sender_ip>    Expected sender address, shown for reference only"
-    echo "  -o <sink>         Optional PulseAudio/PipeWire playback sink name"
-    echo "  -j <jitter_ms>    RTP jitter buffer in milliseconds (default: 100)"
-    echo "  -l <loopback_ms>  Playback loopback latency in milliseconds (default: 50)"
-    echo "  -h                Show this help"
+    echo "  -d, --receiver-ip <ip>       Local IPv4 address (auto-detected if omitted)"
+    echo "  -p, --port <port>            RTP UDP port to receive (mandatory)"
+    echo "  -s, --sender-ip <ip>         Expected sender address, informational only"
+    echo "  -o, --playback-sink <name>   Optional PulseAudio/PipeWire playback sink"
+    echo "  -j, --jitter <ms>            RTP jitter buffer (default: 100)"
+    echo "  -l, --loopback <ms>          Playback loopback latency (default: 50)"
+    echo "  -h, --help                   Show this help"
     echo
     echo "The RTP source filter is not applied; restrict UDP access with your firewall if needed."
     exit "${1:-0}"
@@ -36,25 +37,25 @@ LOOPBACK_MODULE_ID=""
 GST_PID=""
 
 function parse_arguments() {
-    local opt
+    local parsed
 
-    while getopts ":s:d:p:o:j:l:h" opt; do
-        case "$opt" in
-            s) SOURCE_IP="$OPTARG" ;;
-            d) DESTINATION_IP="$OPTARG" ;;
-            p) PORT="$OPTARG" ;;
-            o) PLAYBACK_SINK="$OPTARG" ;;
-            j) JITTER_MS="$OPTARG" ;;
-            l) LOOPBACK_MS="$OPTARG" ;;
-            h) usage 0 ;;
-            :)
-                echo "Error: option -$OPTARG requires an argument." >&2
-                usage 1
-                ;;
-            \?)
-                echo "Error: invalid option -$OPTARG." >&2
-                usage 1
-                ;;
+    if ! parsed=$(getopt -o "s:d:p:o:j:l:h" \
+        -l "sender-ip:,receiver-ip:,port:,playback-sink:,jitter:,loopback:,help" \
+        -- "$@"); then
+        usage 1
+    fi
+    eval set -- "$parsed"
+
+    while true; do
+        case "$1" in
+            -s|--sender-ip) SOURCE_IP=$2; shift 2 ;;
+            -d|--receiver-ip) DESTINATION_IP=$2; shift 2 ;;
+            -p|--port) PORT=$2; shift 2 ;;
+            -o|--playback-sink) PLAYBACK_SINK=$2; shift 2 ;;
+            -j|--jitter) JITTER_MS=$2; shift 2 ;;
+            -l|--loopback) LOOPBACK_MS=$2; shift 2 ;;
+            -h|--help) usage 0 ;;
+            --) shift; break ;;
         esac
     done
 }
@@ -92,7 +93,7 @@ function validate_parameters() {
 function check_dependencies() {
     local command
 
-    for command in ip awk pactl gst-launch-1.0 gst-inspect-1.0 mkfifo ping; do
+    for command in getopt ip awk pactl gst-launch-1.0 gst-inspect-1.0 mkfifo ping; do
         if ! command -v "$command" >/dev/null 2>&1; then
             echo "Error: '$command' is not installed." >&2
             exit 1
