@@ -12,8 +12,9 @@ Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in `src/`. Th
 - `pactl`, `ip`, `awk`, and `ping`
 - `ss` on the receiver, to check local UDP port availability
 - On both machines: `gst-launch-1.0`, `gst-inspect-1.0`, and GStreamer plugins providing `pulsesrc`, `opusenc`, `rtpopuspay`, `udpsink`, `udpsrc`, `rtpjitterbuffer`, `rtpopusdepay`, and `opusdec`
-- On the receiver: GStreamer `audioconvert` and `filesink` elements
-- The `mkfifo` utility on the receiver
+- On the receiver: GStreamer `audioconvert`, `audioresample`, and `pulsesink` elements
+- PulseAudio-compatible `module-null-sink` and `module-remap-source` modules (provided by PipeWire's PulseAudio compatibility server)
+- The `mkfifo` utility on the receiver when using `--sender-ip` filtering
 - Perl on the receiver when using `--sender-ip` for packet filtering
 - Optional GUI: YAD (`yad`) and a graphical desktop session
 
@@ -53,20 +54,20 @@ The receiver also accepts the corresponding short options (`-p`, `-d`, `-s`, `-n
 - `-p`: RTP UDP port to receive, from 1 to 65535 (required; use the same port as the sender).
 - `-d`: receiver's local IPv4 address. Auto-detected from the route to `-s`, or the default route if `-s` is omitted.
 - `-s`: sender IPv4 address. Incoming UDP packets from other IPv4 addresses are discarded. Filtering uses a local Perl relay; packets are still subject to normal UDP/IP spoofing risks.
-- `-n`: optional PulseAudio/PipeWire source name. If omitted, the receiver generates a name from the local address, port, and optional sender address.
+- `-n`: optional friendly label for the exposed RTP input source. Pavucontrol displays the exact name supplied. If omitted, the receiver generates a label from the local address, port, and optional sender address.
 - `-o`: optional playback sink name from `pactl list short sinks`. When supplied, a loopback connects the RTP source to this sink.
 - `-j`: jitter-buffer latency in milliseconds, from 1 to 2000 (default: 200).
 - `-l`: loopback latency in milliseconds (default: 50).
 - `--skip-reachability-check`: skip the startup ICMP ping checks. UDP connectivity is not tested by this option.
 - `-h`: show help.
 
-Unless `-n` is supplied, the receiver creates a PulseAudio/PipeWire source using this name pattern:
+The receiver exposes a remapped input source. Unless `-n` is supplied, its friendly label uses this pattern:
 
 ```text
 rtp_receiver_${DESTINATION_IP}:${PORT}[_sender_${SOURCE_IP}]
 ```
 
-For example, receiver address `198.51.100.20` and port `4010` produce `rtp_receiver_198.51.100.20:4010`. If sender address `192.0.2.10` is supplied with `-s`, the name is `rtp_receiver_198.51.100.20:4010_sender_192.0.2.10`. Select this source as an input in an audio application when `-o` is not used.
+For example, receiver address `198.51.100.20` and port `4010` produce the input name `rtp_receiver_198.51.100.20:4010`. If sender address `192.0.2.10` is supplied with `-s`, the name is `rtp_receiver_198.51.100.20:4010_sender_192.0.2.10`. The null sink's separate monitor is only the internal backing source; select the named RTP input in an audio application when `-o` is not used.
 
 ## How to Run
 
@@ -100,6 +101,6 @@ The sender's `-d` address must be the receiver machine's IPv4 address. The recei
 
 ## Stop and Troubleshoot
 
-In the GUI, press Stop to stop the active session while keeping the final log available, or Close to close the log and stop the session if it is still running. From a terminal, press Ctrl-C. The sender stops its GStreamer pipeline. The receiver stops GStreamer, unloads its source and optional loopback modules, and removes its temporary FIFO directory.
+In the GUI, press Stop to stop the active session while keeping the final log available, or Close to close the log and stop the session if it is still running. From a terminal, press Ctrl-C. The sender stops its GStreamer pipeline. The receiver stops GStreamer and unloads its null sink, optional loopback, and sender-filter resources.
 
 If startup fails, verify that the chosen source or sink exists, that the PulseAudio-compatible server is running, that the receiver address is assigned locally, and that UDP traffic on the selected port can pass between the machines. By default, ICMP ping must also be permitted; pass `--skip-reachability-check` to bypass that check. The receiver's `--sender-ip` filter is an address filter, not a replacement for firewall rules.

@@ -8,12 +8,12 @@ function usage() {
     echo "Usage: $0 --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--source-name <name>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>] [--skip-reachability-check]"
     echo "       $0 [-d <receiver_ip>] -p <port> [-s <sender_ip>] [-n <source_name>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>] [--skip-reachability-check]"
     echo
-    echo "Receives the sender's Opus RTP audio without restarting PipeWire."
+    echo "Receives the sender's Opus RTP audio as a PipeWire/PulseAudio source without restarting PipeWire."
     echo "Options:"
     echo "  -d, --receiver-ip <ip>       Local IPv4 address (auto-detected if omitted)"
     echo "  -p, --port <port>            RTP UDP port to receive (mandatory)"
     echo "  -s, --sender-ip <ip>         Filter packets to this sender IPv4 address"
-    echo "  -n, --source-name <name>     PulseAudio/PipeWire source name (generated if omitted)"
+    echo "  -n, --source-name <name>     Friendly monitor-source label (generated if omitted)"
     echo "  -o, --playback-sink <name>   Optional PulseAudio/PipeWire playback sink"
     echo "  -j, --jitter <ms>            RTP jitter buffer (default: 200)"
     echo "  -l, --loopback <ms>          Playback loopback latency (default: 50)"
@@ -34,10 +34,12 @@ CUSTOM_SOURCE_NAME=""
 SKIP_REACHABILITY_CHECK=0
 LOCAL_IFNAME=""
 RUNTIME_DIR=""
-FIFO=""
 FILTER_FIFO=""
 SOURCE_NAME=""
 SOURCE_MODULE_ID=""
+SOURCE_DEVICE_NAME=""
+NULL_SINK_MODULE_ID=""
+NULL_SINK_NAME=""
 LOOPBACK_MODULE_ID=""
 GST_PID=""
 FILTER_PID=""
@@ -103,12 +105,12 @@ function validate_parameters() {
 function check_dependencies() {
     local command
 
-    local -a commands=(getopt ip awk pactl gst-launch-1.0 gst-inspect-1.0 mkfifo ss)
+    local -a commands=(getopt ip awk pactl gst-launch-1.0 gst-inspect-1.0 ss)
     if (( SKIP_REACHABILITY_CHECK == 0 )); then
         commands+=(ping)
     fi
     if [[ -n "$SOURCE_IP" ]]; then
-        commands+=(perl)
+        commands+=(perl mkfifo)
     fi
     for command in "${commands[@]}"; do
         if ! command -v "$command" >/dev/null 2>&1; then
@@ -126,7 +128,8 @@ function check_dependencies() {
 function check_gstreamer_elements() {
     local element
 
-    for element in udpsrc rtpjitterbuffer rtpopusdepay opusdec audioconvert filesink; do
+    local -a elements=(udpsrc rtpjitterbuffer rtpopusdepay opusdec audioconvert audioresample pulsesink)
+    for element in "${elements[@]}"; do
         if ! gst-inspect-1.0 "$element" >/dev/null 2>&1; then
             echo "Error: GStreamer element '$element' is unavailable." >&2
             exit 1
@@ -209,14 +212,16 @@ function cleanup() {
     if [[ -n "$SOURCE_MODULE_ID" ]]; then
         pactl unload-module "$SOURCE_MODULE_ID" >/dev/null 2>&1 || true
     fi
+    if [[ -n "$NULL_SINK_MODULE_ID" ]]; then
+        pactl unload-module "$NULL_SINK_MODULE_ID" >/dev/null 2>&1 || true
+    fi
     if [[ -n "$RUNTIME_DIR" ]]; then
         rm -rf -- "$RUNTIME_DIR"
     fi
 }
 
-function create_runtime_fifo() {
+function create_runtime_directory() {
     RUNTIME_DIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/rta-rtp-receiver.XXXXXX")"
-    FIFO="$RUNTIME_DIR/audio.pcm"
     if [[ -n "$CUSTOM_SOURCE_NAME" ]]; then
         SOURCE_NAME="$CUSTOM_SOURCE_NAME"
     else
@@ -229,7 +234,8 @@ function create_runtime_fifo() {
         FILTER_FIFO="$RUNTIME_DIR/filter-ready"
         mkfifo "$FILTER_FIFO"
     fi
-    mkfifo "$FIFO"
+    NULL_SINK_NAME="rtp_audio_${PORT}_$$"
+    SOURCE_DEVICE_NAME="rtp_input_${PORT}_$$"
 }
 
 function start_udp_filter() {
@@ -261,31 +267,34 @@ function start_gstreamer_receiver() {
         receive_port="$RELAY_PORT"
     fi
 
-    gst-launch-1.0 -q \
-        udpsrc address="$receive_address" port="$receive_port" \
-            caps='application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)96' \
-        ! rtpjitterbuffer latency="$JITTER_MS" drop-on-latency=true do-lost=true \
-        ! rtpopusdepay \
-        ! opusdec \
-        ! audioconvert \
-        ! audio/x-raw,format=S16BE,rate=48000,channels=2 \
-        ! filesink location="$FIFO" &
+    local -a pipeline=(
+        udpsrc address="$receive_address" port="$receive_port"
+        '!' 'application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)96'
+        '!' rtpjitterbuffer latency="$JITTER_MS" drop-on-latency=true do-lost=true
+        '!' rtpopusdepay '!' opusdec '!' audioconvert
+    )
+    load_null_sink
+    pipeline+=( '!' audioresample '!' pulsesink "device=$NULL_SINK_NAME" )
+    gst-launch-1.0 -q "${pipeline[@]}" &
     GST_PID=$!
 }
 
-function load_pipe_source() {
-    SOURCE_MODULE_ID="$(pactl load-module module-pipe-source \
-        "file=$FIFO" \
-        "source_name=$SOURCE_NAME" \
-        "format=s16be" \
+function load_null_sink() {
+    NULL_SINK_MODULE_ID="$(pactl load-module module-null-sink \
+        "sink_name=$NULL_SINK_NAME" \
         "rate=48000" \
-        "channels=2")"
+        "channels=2" \
+        "sink_properties=device.description=$SOURCE_NAME")"
+    SOURCE_MODULE_ID="$(pactl load-module module-remap-source \
+        "master=$NULL_SINK_NAME.monitor" \
+        "source_name=$SOURCE_DEVICE_NAME" \
+        "source_properties=device.description=$SOURCE_NAME")"
 }
 
 function load_playback_loopback() {
     if [[ -n "$PLAYBACK_SINK" ]]; then
         LOOPBACK_MODULE_ID="$(pactl load-module module-loopback \
-            "source=$SOURCE_NAME" \
+            "source=$SOURCE_DEVICE_NAME" \
             "sink=$PLAYBACK_SINK" \
             "latency_msec=$LOOPBACK_MS")"
     fi
@@ -293,8 +302,8 @@ function load_playback_loopback() {
 
 function show_receiver_status() {
     echo "Creating live RTP source on $DESTINATION_IP:$PORT (interface $LOCAL_IFNAME)..."
-    echo "RTP source: $SOURCE_NAME (module $SOURCE_MODULE_ID)"
-    echo "Jitter buffer: ${JITTER_MS} ms (drops stale data to stay bounded)"
+    echo "RTP source: $SOURCE_NAME ($SOURCE_DEVICE_NAME)"
+    echo "Jitter buffer: ${JITTER_MS} ms"
     if [[ -n "$SOURCE_IP" ]]; then
         echo "Filtered sender: $SOURCE_IP"
     fi
@@ -302,7 +311,7 @@ function show_receiver_status() {
     if [[ -n "$PLAYBACK_SINK" ]]; then
         echo "Playback sink: $PLAYBACK_SINK (loopback latency ${LOOPBACK_MS} ms)"
     else
-        echo "Select $SOURCE_NAME as an input source in an audio application."
+        echo "Select '$SOURCE_NAME' as an input source in an audio application."
     fi
     if [[ "${RTP_GUI:-0}" != 1 ]]; then
         echo "Press Ctrl-C to unload the source and stop receiving."
@@ -327,9 +336,8 @@ function main() {
     check_reachable_ips
     check_playback_sink
     configure_cleanup
-    create_runtime_fifo
+    create_runtime_directory
     start_gstreamer_receiver
-    load_pipe_source
     load_playback_loopback
     show_receiver_status
     wait_for_receiver
