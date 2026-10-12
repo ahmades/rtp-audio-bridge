@@ -5,20 +5,24 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rtp_common.sh"
 
 function usage() {
-    echo "Usage: $0 --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--source-name <name>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>] [--skip-reachability-check]"
-    echo "       $0 [-d <receiver_ip>] -p <port> [-s <sender_ip>] [-n <source_name>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>] [--skip-reachability-check]"
+    echo "Usage: $0 --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--source-name <name>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>] [--sink-buffer <ms>] [--sink-latency <ms>] [--diagnostics] [--no-drop-on-latency] [--skip-reachability-check]"
+    echo "       $0 -p <port> [-r <receiver_ipv4>] [-s <sender_ipv4>] [-n <source_name>] [-o <playback_sink>] [-j <jitter_ms>] [-l <loopback_ms>] [--sink-buffer <ms>] [--sink-latency <ms>] [-d] [-N] [-S]"
     echo
     echo "Receives the sender's Opus RTP audio as a PipeWire/PulseAudio source without restarting PipeWire."
     echo "Options:"
-    echo "  -d, --receiver-ip <ip>       Local IPv4 address (auto-detected if omitted)"
-    echo "  -p, --port <port>            RTP UDP port to receive (mandatory)"
-    echo "  -s, --sender-ip <ip>         Filter packets to this sender IPv4 address"
-    echo "  -n, --source-name <name>     Friendly monitor-source label (generated if omitted)"
-    echo "  -o, --playback-sink <name>   Optional PulseAudio/PipeWire playback sink"
-    echo "  -j, --jitter <ms>            RTP jitter buffer (default: 200)"
-    echo "  -l, --loopback <ms>          Playback loopback latency (default: 50)"
-    echo "      --skip-reachability-check Skip the ICMP ping check before starting"
-    echo "  -h, --help                   Show this help"
+    echo "  -r, --receiver-ip <ipv4>       Receiver IPv4 address (auto-detected if omitted)"
+    echo "  -p, --port <port>              RTP UDP port to receive (mandatory)"
+    echo "  -s, --sender-ip <ipv4>         Filter packets to this sender IPv4 address"
+    echo "  -n, --source-name <name>       Friendly monitor-source label (generated if omitted)"
+    echo "  -o, --playback-sink <name>     Optional PulseAudio/PipeWire playback sink"
+    echo "  -j, --jitter <ms>              RTP jitter buffer (default: 200)"
+    echo "  -l, --loopback <ms>            Playback loopback latency (default: 50)"
+    echo "  -B, --sink-buffer <ms>         PulseAudio sink buffer (default: 50)"
+    echo "  -L, --sink-latency <ms>        PulseAudio write latency (default: 5)"
+    echo "  -d, --diagnostics              Report GStreamer messages, including RTP drops"
+    echo "  -N, --no-drop-on-latency       Keep late queued packets; playback latency may grow"
+    echo "  -S, --skip-reachability-check  Skip the ICMP ping check before starting"
+    echo "  -h, --help                     Show this help"
     echo
     echo "When --sender-ip is set, packets from other IPv4 addresses are discarded."
     exit "${1:-0}"
@@ -29,10 +33,14 @@ DESTINATION_IP=""
 PORT=""
 JITTER_MS=200
 LOOPBACK_MS=50
+SINK_BUFFER_MS=50
+SINK_LATENCY_MS=5
 PLAYBACK_SINK=""
 CUSTOM_SOURCE_NAME=""
 SKIP_REACHABILITY_CHECK=0
-LOCAL_IFNAME=""
+DIAGNOSTICS=0
+DROP_ON_LATENCY=true
+RECEIVER_IFNAME=""
 RUNTIME_DIR=""
 FILTER_FIFO=""
 SOURCE_NAME=""
@@ -49,8 +57,8 @@ FILTER_HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rtp_udp_filte
 function parse_arguments() {
     local parsed
 
-    if ! parsed=$(getopt -o "s:d:p:o:j:l:n:h" \
-        -l "sender-ip:,receiver-ip:,port:,playback-sink:,jitter:,loopback:,source-name:,skip-reachability-check,help" \
+    if ! parsed=$(getopt -o "s:r:p:o:j:l:B:L:n:dSNh" \
+        -l "sender-ip:,receiver-ip:,port:,playback-sink:,jitter:,loopback:,sink-buffer:,sink-latency:,source-name:,skip-reachability-check,diagnostics,no-drop-on-latency,help" \
         -- "$@"); then
         usage 1
     fi
@@ -59,13 +67,17 @@ function parse_arguments() {
     while true; do
         case "$1" in
             -s|--sender-ip) SOURCE_IP=$2; shift 2 ;;
-            -d|--receiver-ip) DESTINATION_IP=$2; shift 2 ;;
+            -r|--receiver-ip) DESTINATION_IP=$2; shift 2 ;;
             -p|--port) PORT=$2; shift 2 ;;
             -o|--playback-sink) PLAYBACK_SINK=$2; shift 2 ;;
             -j|--jitter) JITTER_MS=$2; shift 2 ;;
             -l|--loopback) LOOPBACK_MS=$2; shift 2 ;;
+            -B|--sink-buffer) SINK_BUFFER_MS=$2; shift 2 ;;
+            -L|--sink-latency) SINK_LATENCY_MS=$2; shift 2 ;;
             -n|--source-name) CUSTOM_SOURCE_NAME=$2; shift 2 ;;
-            --skip-reachability-check) SKIP_REACHABILITY_CHECK=1; shift ;;
+            -S|--skip-reachability-check) SKIP_REACHABILITY_CHECK=1; shift ;;
+            -d|--diagnostics) DIAGNOSTICS=1; shift ;;
+            -N|--no-drop-on-latency) DROP_ON_LATENCY=false; shift ;;
             -h|--help) usage 0 ;;
             --) shift; break ;;
         esac
@@ -76,12 +88,12 @@ function validate_parameters() {
     [[ -n "$PORT" ]] || { echo "Error: -p <port> is mandatory." >&2; usage 1; }
 
     if [[ -n "$SOURCE_IP" ]] && ! is_ipv4 "$SOURCE_IP"; then
-        echo "Error: invalid sender IPv4 address: $SOURCE_IP" >&2
+        echo "Error: sender IPv4 address is invalid: $SOURCE_IP" >&2
         exit 1
     fi
 
     if [[ -n "$DESTINATION_IP" ]] && ! is_ipv4 "$DESTINATION_IP"; then
-        echo "Error: invalid receiver IPv4 address: $DESTINATION_IP" >&2
+        echo "Error: receiver IPv4 address is invalid: $DESTINATION_IP" >&2
         exit 1
     fi
 
@@ -98,6 +110,21 @@ function validate_parameters() {
 
     if ! [[ "$LOOPBACK_MS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
         echo "Error: invalid loopback latency: $LOOPBACK_MS" >&2
+        exit 1
+    fi
+
+    if ! [[ "$SINK_BUFFER_MS" =~ ^[0-9]+$ ]] || (( SINK_BUFFER_MS < 1 || SINK_BUFFER_MS > 1000 )); then
+        echo "Error: sink buffer must be an integer from 1 to 1000 ms: $SINK_BUFFER_MS" >&2
+        exit 1
+    fi
+
+    if ! [[ "$SINK_LATENCY_MS" =~ ^[0-9]+$ ]] || (( SINK_LATENCY_MS < 1 || SINK_LATENCY_MS > 100 )); then
+        echo "Error: sink latency must be an integer from 1 to 100 ms: $SINK_LATENCY_MS" >&2
+        exit 1
+    fi
+
+    if (( SINK_LATENCY_MS > SINK_BUFFER_MS )); then
+        echo "Error: sink latency cannot exceed sink buffer." >&2
         exit 1
     fi
 }
@@ -137,23 +164,23 @@ function check_gstreamer_elements() {
     done
 }
 
-function resolve_local_interface() {
+function resolve_receiver_interface() {
     if [[ -z "$DESTINATION_IP" ]]; then
-        DESTINATION_IP="$(local_ipv4_for_peer "$SOURCE_IP")" || {
-            echo "Error: could not determine the local receiver IP from the routing table." >&2
+        DESTINATION_IP="$(route_ipv4_for_peer "$SOURCE_IP")" || {
+            echo "Error: could not determine the receiver IPv4 address from the routing table." >&2
             exit 1
         }
-        echo "Using local receiver IP: $DESTINATION_IP"
+        echo "Using receiver IPv4 address: $DESTINATION_IP"
     fi
 
     if ! is_ipv4 "$DESTINATION_IP"; then
-        echo "Error: invalid receiver IPv4 address: $DESTINATION_IP" >&2
+        echo "Error: receiver IPv4 address is invalid: $DESTINATION_IP" >&2
         exit 1
     fi
 
-    LOCAL_IFNAME="$(local_ipv4_interface "$DESTINATION_IP")"
-    if [[ -z "$LOCAL_IFNAME" ]]; then
-        echo "Error: receiver IP is not assigned to a local interface: $DESTINATION_IP" >&2
+    RECEIVER_IFNAME="$(interface_for_ipv4 "$DESTINATION_IP")"
+    if [[ -z "$RECEIVER_IFNAME" ]]; then
+        echo "Error: receiver IPv4 address is not configured on a network interface: $DESTINATION_IP" >&2
         exit 1
     fi
 }
@@ -270,12 +297,18 @@ function start_gstreamer_receiver() {
     local -a pipeline=(
         udpsrc address="$receive_address" port="$receive_port"
         '!' 'application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)OPUS,payload=(int)96'
-        '!' rtpjitterbuffer latency="$JITTER_MS" drop-on-latency=true do-lost=true
+        '!' rtpjitterbuffer latency="$JITTER_MS" "drop-on-latency=$DROP_ON_LATENCY" do-lost=true "post-drop-messages=$([[ $DIAGNOSTICS -eq 1 ]] && printf true || printf false)"
         '!' rtpopusdepay '!' opusdec '!' audioconvert
     )
     load_null_sink
-    pipeline+=( '!' audioresample '!' pulsesink "device=$NULL_SINK_NAME" )
-    gst-launch-1.0 -q "${pipeline[@]}" &
+    pipeline+=( '!' audioresample '!' pulsesink "device=$NULL_SINK_NAME" \
+        "buffer-time=$((SINK_BUFFER_MS * 1000))" \
+        "latency-time=$((SINK_LATENCY_MS * 1000))" )
+    if (( DIAGNOSTICS )); then
+        gst-launch-1.0 --messages "${pipeline[@]}" &
+    else
+        gst-launch-1.0 -q "${pipeline[@]}" &
+    fi
     GST_PID=$!
 }
 
@@ -301,9 +334,13 @@ function load_playback_loopback() {
 }
 
 function show_receiver_status() {
-    echo "Creating live RTP source on $DESTINATION_IP:$PORT (interface $LOCAL_IFNAME)..."
+    echo "Creating live RTP source on $DESTINATION_IP:$PORT (interface $RECEIVER_IFNAME)..."
     echo "RTP source: $SOURCE_NAME ($SOURCE_DEVICE_NAME)"
     echo "Jitter buffer: ${JITTER_MS} ms"
+    echo "Pulse sink buffer/write latency: ${SINK_BUFFER_MS}/${SINK_LATENCY_MS} ms"
+    if [[ "$DROP_ON_LATENCY" == false ]]; then
+        echo "Jitter-buffer latency cap: disabled (latency can grow)"
+    fi
     if [[ -n "$SOURCE_IP" ]]; then
         echo "Filtered sender: $SOURCE_IP"
     fi
@@ -331,7 +368,7 @@ function main() {
     validate_parameters
     check_dependencies
     check_gstreamer_elements
-    resolve_local_interface
+    resolve_receiver_interface
     check_udp_port_available
     check_reachable_ips
     check_playback_sink

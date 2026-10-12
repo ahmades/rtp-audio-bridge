@@ -12,13 +12,13 @@ function is_ipv4() {
     done
 }
 
-function local_ipv4_interface() {
+function interface_for_ipv4() {
     ip -o -4 addr show | 
 	awk -v address="$1" \
 		'index($4, address "/") == 1 { print $2; found = 1; exit } END { if (!found) exit 1 }'
 }
 
-function local_ipv4_for_peer() {
+function route_ipv4_for_peer() {
     local peer=${1:-1.1.1.1}
 
     ip -o -4 route get "$peer" | awk '{ for (field = 1; field <= NF; field++) if ($field == "src") { print $(field + 1); found = 1; exit } } END { if (!found) exit 1 }'
@@ -30,7 +30,7 @@ function check_ip_reachable() {
     for address in "$@"; do
         [[ -n "$address" ]] || continue
         if ! ping -c 1 -W 2 "$address" >/dev/null 2>&1; then
-            echo "Error: IP address is unreachable: $address" >&2
+            echo "Error: IPv4 address is unreachable: $address" >&2
             return 1
         fi
     done

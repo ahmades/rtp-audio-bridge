@@ -18,7 +18,7 @@ Keep `rtp_send.sh`, `rtp_receive.sh`, and `rtp_common.sh` together in `src/`. Th
 - Perl on the receiver when using `--sender-ip` for packet filtering
 - Optional GUI: YAD (`yad`) and a graphical desktop session
 
-The sender and receiver must be able to exchange UDP traffic on the selected port. The receiver checks that the local UDP port is not already in use before starting. This does not verify remote firewall rules or prove that packets can reach the receiver. By default, the scripts ping their configured addresses once before starting. Use `--skip-reachability-check` when ICMP echo is blocked but UDP traffic is allowed.
+The sender and receiver must be able to exchange UDP traffic on the selected port. The receiver checks that the UDP port is not already in use before starting. This does not verify firewall rules or prove that packets can reach the receiver. By default, the scripts ping their configured addresses once before starting. Use `--skip-reachability-check` (or `-S`) when ICMP echo is blocked but UDP traffic is allowed.
 
 ## Usage
 
@@ -29,37 +29,42 @@ Run `./gui/rtp_gui.sh` from the repository directory. Choose Sender or Receiver,
 ### Sender
 
 ```text
-src/rtp_send.sh --source <pulse_source> --receiver-ip <ip> --port <port> [--sender-ip <ip>] [--mtu <bytes>] [--bitrate <bits/s>] [--skip-reachability-check]
+src/rtp_send.sh --source <pulse_source> --receiver-ip <receiver_ipv4> --port <port> [--sender-ip <sender_ipv4>] [--mtu <bytes>] [--bitrate <bits/s>] [--diagnostics] [--skip-reachability-check]
 ```
 
-The sender also accepts the corresponding short options (`-i`, `-d`, `-p`, `-s`, `-m`, and `-b`). Long options accept either `--option value` or `--option=value`.
+Short options: `-i` source, `-s` sender IPv4 address, `-r` receiver IPv4 address, `-p` port, `-m` MTU, `-b` bitrate, `-d` diagnostics, and `-S` skip reachability checks. Long options accept either `--option value` or `--option=value`.
 
-- `-i`: capture source name from `pactl list short sources` (required).
-- `-d`: receiver IPv4 address (required).
-- `-p`: RTP UDP port, from 1 to 65535 (required).
-- `-s`: sender's local IPv4 address. Auto-detected from the route to the receiver if omitted.
-- `-m`: maximum RTP packet size in bytes, from 256 to 9000 (default: 1200).
-- `-b`: Opus target bitrate in bits per second, from 6000 to 512000 (default: 64000).
-- `--skip-reachability-check`: skip the startup ICMP ping checks. UDP connectivity is not tested by this option.
-- `-h`: show help.
+- `-i`, `--source`: capture source name from `pactl list short sources` (required).
+- `-r`, `--receiver-ip`: receiver IPv4 address (required).
+- `-p`, `--port`: RTP UDP port, from 1 to 65535 (required).
+- `-s`, `--sender-ip`: sender IPv4 address. Auto-detected from the route to the receiver if omitted.
+- `-m`, `--mtu`: maximum RTP packet size in bytes, from 256 to 9000 (default: 1200).
+- `-b`, `--bitrate`: Opus target bitrate in bits per second, from 6000 to 512000 (default: 64000).
+- `-d`, `--diagnostics`: print GStreamer bus messages to help diagnose sender capture, encoding, and network-sink behavior.
+- `-S`, `--skip-reachability-check`: skip the startup ICMP ping checks. UDP connectivity is not tested by this option.
+- `-h`, `--help`: show help.
 
 ### Receiver
 
 ```text
-src/rtp_receive.sh --port <port> [--receiver-ip <ip>] [--sender-ip <ip>] [--source-name <name>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>] [--skip-reachability-check]
+src/rtp_receive.sh --port <port> [--receiver-ip <receiver_ipv4>] [--sender-ip <sender_ipv4>] [--source-name <name>] [--playback-sink <name>] [--jitter <ms>] [--loopback <ms>] [--sink-buffer <ms>] [--sink-latency <ms>] [--diagnostics] [--no-drop-on-latency] [--skip-reachability-check]
 ```
 
-The receiver also accepts the corresponding short options (`-p`, `-d`, `-s`, `-n`, `-o`, `-j`, and `-l`). Long options accept either `--option value` or `--option=value`.
+Long options accept either `--option value` or `--option=value`.
 
-- `-p`: RTP UDP port to receive, from 1 to 65535 (required; use the same port as the sender).
-- `-d`: receiver's local IPv4 address. Auto-detected from the route to `-s`, or the default route if `-s` is omitted.
-- `-s`: sender IPv4 address. Incoming UDP packets from other IPv4 addresses are discarded. Filtering uses a local Perl relay; packets are still subject to normal UDP/IP spoofing risks.
-- `-n`: optional friendly label for the exposed RTP input source. Pavucontrol displays the exact name supplied. If omitted, the receiver generates a label from the local address, port, and optional sender address.
-- `-o`: optional playback sink name from `pactl list short sinks`. When supplied, a loopback connects the RTP source to this sink.
-- `-j`: jitter-buffer latency in milliseconds, from 1 to 2000 (default: 200).
-- `-l`: loopback latency in milliseconds (default: 50).
-- `--skip-reachability-check`: skip the startup ICMP ping checks. UDP connectivity is not tested by this option.
-- `-h`: show help.
+- `-p`, `--port`: RTP UDP port to receive, from 1 to 65535 (required; use the same port as the sender).
+- `-r`, `--receiver-ip`: receiver IPv4 address. Auto-detected from the route to `-s`/`--sender-ip`, or the default route if the sender address is omitted.
+- `-s`, `--sender-ip`: sender IPv4 address. Incoming UDP packets from other IPv4 addresses are discarded. Filtering uses a local Perl relay; packets are still subject to normal UDP/IP spoofing risks.
+- `-n`, `--source-name`: optional friendly label for the exposed RTP input source. Pavucontrol displays the exact name supplied. If omitted, the receiver generates a label from the receiver IPv4 address, port, and optional sender IPv4 address.
+- `-o`, `--playback-sink`: optional playback sink name from `pactl list short sinks`. When supplied, a loopback connects the RTP source to this sink.
+- `-j`, `--jitter`: jitter-buffer latency in milliseconds, from 1 to 2000 (default: 200).
+- `-l`, `--loopback`: loopback latency in milliseconds (default: 50).
+- `-B`, `--sink-buffer`: PulseAudio sink buffer in milliseconds, from 1 to 1000 (default: 50).
+- `-L`, `--sink-latency`: PulseAudio sink write latency in milliseconds, from 1 to 100 and no greater than `--sink-buffer`/`-B` (default: 5).
+- `-d`, `--diagnostics`: print GStreamer bus messages and jitter-buffer packet-drop reports without changing pipeline latency or drop policy.
+- `-N`, `--no-drop-on-latency`: disable the jitter buffer's latency cap. This can reduce drops caused by packet bursts, but queued audio and playback latency may grow; use with `--diagnostics`/`-d` to compare.
+- `-S`, `--skip-reachability-check`: skip the startup ICMP ping checks. UDP connectivity is not tested by this option.
+- `-h`, `--help`: show help.
 
 The receiver exposes a remapped input source. Unless `-n` is supplied, its friendly label uses this pattern:
 
@@ -73,13 +78,13 @@ For example, receiver address `198.51.100.20` and port `4010` produce the input 
 
 Start the receiver first. Replace the example port and addresses with values for your network:
 
-The addresses below are reserved for documentation and are not routable hosts. Replace them with your machines' real local and remote IPv4 addresses before running the commands.
+The addresses below are reserved for documentation and are not routable hosts. Replace them with the sender and receiver IPv4 addresses for your network before running the commands.
 
 ```bash
 ./src/rtp_receive.sh -p 4010 -s 192.78.2.10 -l 20 -j 300
 ```
 
-Here `-s` is the sender's IPv4 address. The receiver chooses its local destination address from the route to that sender. If `-s` is omitted too, it uses the local IPv4 address selected by the default route:
+Here `-s` is the sender IPv4 address. The receiver determines its receiver IPv4 address from the route to that sender. If `-s` is omitted too, it uses the receiver IPv4 address selected by the default route:
 
 ```bash
 ./src/rtp_receive.sh -p 4010
@@ -88,19 +93,19 @@ Here `-s` is the sender's IPv4 address. The receiver chooses its local destinati
 Then start the sender on the other machine:
 
 ```bash
-./src/rtp_send.sh -i '<capture-source-name>' -d 198.51.100.20 -p 4010
+./src/rtp_send.sh -i '<capture-source-name>' -r 198.51.100.20 -p 4010
 ```
 
-The sender chooses its local IPv4 address from the route to the receiver when `-s` is omitted. Supply `-s <sender-ip>` to select a particular local interface address explicitly:
+The sender determines its sender IPv4 address from the route to the receiver when `-s` is omitted. Supply `-s <sender-ip>` to select a specific sender IPv4 address:
 
 ```bash
-./src/rtp_send.sh -i '<capture-source-name>' -s 192.78.2.10 -d 198.51.100.20 -p 4010
+./src/rtp_send.sh -i '<capture-source-name>' -s 192.78.2.10 -r 198.51.100.20 -p 4010
 ```
 
-The sender's `-d` address must be the receiver machine's IPv4 address. The receiver's `-d`, when supplied, must be an IPv4 address assigned locally to the receiver. Both ends use stereo audio at 48 kHz and RTP payload type 96. The Opus bitrate is configurable on the sender; `-m` limits RTP packet size and does not set the audio bitrate.
+The sender's `-r` value must be the receiver IPv4 address. The receiver's `-r`, when supplied, must be an IPv4 address assigned to the receiver machine. Both ends use stereo audio at 48 kHz and RTP payload type 96. The Opus bitrate is configurable on the sender; `-m` limits RTP packet size and does not set the audio bitrate.
 
 ## Stop and Troubleshoot
 
 In the GUI, press Stop to stop the active session while keeping the final log available, or Close to close the log and stop the session if it is still running. From a terminal, press Ctrl-C. The sender stops its GStreamer pipeline. The receiver stops GStreamer and unloads its null sink, optional loopback, and sender-filter resources.
 
-If startup fails, verify that the chosen source or sink exists, that the PulseAudio-compatible server is running, that the receiver address is assigned locally, and that UDP traffic on the selected port can pass between the machines. By default, ICMP ping must also be permitted; pass `--skip-reachability-check` to bypass that check. The receiver's `--sender-ip` filter is an address filter, not a replacement for firewall rules.
+If startup fails, verify that the chosen source or sink exists, that the PulseAudio-compatible server is running, that the receiver IPv4 address is configured on the receiver machine, and that UDP traffic on the selected port can pass between the machines. By default, ICMP ping must also be permitted; pass `--skip-reachability-check` or `-S` to bypass that check. The receiver's `--sender-ip` filter is an address filter, not a replacement for firewall rules.

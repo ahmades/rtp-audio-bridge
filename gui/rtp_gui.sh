@@ -109,7 +109,7 @@ function choose_mode() {
 
 function sender_form() {
     local sources form_data
-    load_defaults "$CONFIG_DIR/sender.defaults" "" "" "" "4010" "1200" "64000" "FALSE"
+    load_defaults "$CONFIG_DIR/sender.defaults" "" "" "" "4010" "1200" "64000" "FALSE" "FALSE"
     sources="$(pactl list short sources | combo_values "" "${FORM_DEFAULTS[0]}")"
     if [[ -z "$sources" ]]; then
         show_error "No PulseAudio/PipeWire sources are available."
@@ -126,25 +126,27 @@ function sender_form() {
         --field="RTP MTU" "${FORM_DEFAULTS[4]}" \
         --field="Opus bitrate (bits/s)" "${FORM_DEFAULTS[5]}" \
         --field="Skip ping reachability check:CHK" "${FORM_DEFAULTS[6]}" \
-        --width=540 --height=340 \
+        --field="GStreamer diagnostics:CHK" "${FORM_DEFAULTS[7]}" \
+        --width=540 --height=380 \
         --button=Cancel:1 --button=Start:0); then
         return 1
     fi
 
-    local source sender_ip receiver_ip port mtu bitrate skip_ping
-    IFS='|' read -r source sender_ip receiver_ip port mtu bitrate skip_ping <<< "$form_data"
-    save_defaults "$CONFIG_DIR/sender.defaults" "$source" "$sender_ip" "$receiver_ip" "$port" "$mtu" "$bitrate" "$skip_ping" || true
+    local source sender_ip receiver_ip port mtu bitrate skip_ping diagnostics
+    IFS='|' read -r source sender_ip receiver_ip port mtu bitrate skip_ping diagnostics <<< "$form_data"
+    save_defaults "$CONFIG_DIR/sender.defaults" "$source" "$sender_ip" "$receiver_ip" "$port" "$mtu" "$bitrate" "$skip_ping" "$diagnostics" || true
     local -a args=(--source "$source" --receiver-ip "$receiver_ip" --port "$port" --mtu "$mtu" --bitrate "$bitrate")
     if [[ -n "$sender_ip" ]]; then
         args+=(--sender-ip "$sender_ip")
     fi
     [[ "${skip_ping^^}" != TRUE ]] || args+=(--skip-reachability-check)
+    [[ "${diagnostics^^}" != TRUE ]] || args+=(--diagnostics)
     run_session "Sender" "$SENDER" "${args[@]}"
 }
 
 function receiver_form() {
     local sinks form_data
-    load_defaults "$CONFIG_DIR/receiver.defaults" "4010" "" "" "None" "200" "50" "" "FALSE"
+    load_defaults "$CONFIG_DIR/receiver.defaults" "4010" "" "" "None" "200" "50" "" "FALSE" "50" "5" "FALSE" "FALSE"
     sinks="$(pactl list short sinks | combo_values "None" "${FORM_DEFAULTS[3]}")"
 
     if ! form_data=$(yad --form \
@@ -158,20 +160,26 @@ function receiver_form() {
         --field="Loopback latency (ms)" "${FORM_DEFAULTS[5]}" \
         --field="Receiver source name (optional)" "${FORM_DEFAULTS[6]}" \
         --field="Skip ping reachability check:CHK" "${FORM_DEFAULTS[7]}" \
-        --width=560 --height=360 \
+        --field="PulseAudio sink buffer (ms)" "${FORM_DEFAULTS[8]}" \
+        --field="PulseAudio sink write latency (ms)" "${FORM_DEFAULTS[9]}" \
+        --field="GStreamer diagnostics:CHK" "${FORM_DEFAULTS[10]}" \
+        --field="Keep late packets (disable latency drop):CHK" "${FORM_DEFAULTS[11]}" \
+        --width=560 --height=500 \
         --button=Cancel:1 --button=Start:0); then
         return 1
     fi
 
-    local port receiver_ip sender_ip sink jitter loopback source_name skip_ping
-    IFS='|' read -r port receiver_ip sender_ip sink jitter loopback source_name skip_ping <<< "$form_data"
-    save_defaults "$CONFIG_DIR/receiver.defaults" "$port" "$receiver_ip" "$sender_ip" "$sink" "$jitter" "$loopback" "$source_name" "$skip_ping" || true
-    local -a args=(--port "$port" --jitter "$jitter" --loopback "$loopback")
+    local port receiver_ip sender_ip sink jitter loopback source_name skip_ping sink_buffer sink_latency diagnostics no_drop_on_latency
+    IFS='|' read -r port receiver_ip sender_ip sink jitter loopback source_name skip_ping sink_buffer sink_latency diagnostics no_drop_on_latency <<< "$form_data"
+    save_defaults "$CONFIG_DIR/receiver.defaults" "$port" "$receiver_ip" "$sender_ip" "$sink" "$jitter" "$loopback" "$source_name" "$skip_ping" "$sink_buffer" "$sink_latency" "$diagnostics" "$no_drop_on_latency" || true
+    local -a args=(--port "$port" --jitter "$jitter" --loopback "$loopback" --sink-buffer "$sink_buffer" --sink-latency "$sink_latency")
     [[ -z "$receiver_ip" ]] || args+=(--receiver-ip "$receiver_ip")
     [[ -z "$sender_ip" ]] || args+=(--sender-ip "$sender_ip")
     [[ -z "$source_name" ]] || args+=(--source-name "$source_name")
     [[ "$sink" == "None" || -z "$sink" ]] || args+=(--playback-sink "$sink")
     [[ "${skip_ping^^}" != TRUE ]] || args+=(--skip-reachability-check)
+    [[ "${diagnostics^^}" != TRUE ]] || args+=(--diagnostics)
+    [[ "${no_drop_on_latency^^}" != TRUE ]] || args+=(--no-drop-on-latency)
     run_session "Receiver" "$RECEIVER" "${args[@]}"
 }
 
