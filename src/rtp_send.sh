@@ -5,8 +5,8 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rtp_common.sh"
 
 function usage() {
-    echo "Usage: $0 --source <pulse_source> [--sender-ip <ip>] --receiver-ip <ip> --port <port> [--mtu <bytes>] [--bitrate <bits/s>]"
-    echo "       $0 -i <pulse_source> [-s <sender_ip>] -d <receiver_ip> -p <port> [-m <mtu>] [-b <bitrate>]"
+    echo "Usage: $0 --source <pulse_source> [--sender-ip <ip>] --receiver-ip <ip> --port <port> [--mtu <bytes>] [--bitrate <bits/s>] [--skip-reachability-check]"
+    echo "       $0 -i <pulse_source> [-s <sender_ip>] -d <receiver_ip> -p <port> [-m <mtu>] [-b <bitrate>] [--skip-reachability-check]"
     echo
     echo "Options:"
     echo "  -i, --source <name>          PulseAudio/PipeWire source name (mandatory)"
@@ -15,6 +15,7 @@ function usage() {
     echo "  -p, --port <port>            RTP UDP port (mandatory)"
     echo "  -m, --mtu <bytes>            Maximum RTP packet size (default: 1200)"
     echo "  -b, --bitrate <bits/s>       Opus bitrate (default: 64000)"
+    echo "      --skip-reachability-check Skip the ICMP ping check before starting"
     echo "  -h, --help                   Show this help"
     exit "${1:-0}"
 }
@@ -25,13 +26,14 @@ DESTINATION_IP=""
 PORT=""
 MTU=1200
 BITRATE=64000
+SKIP_REACHABILITY_CHECK=0
 GST_PID=""
 
 function parse_arguments() {
     local parsed
 
     if ! parsed=$(getopt -o "i:s:d:p:m:b:h" \
-        -l "source:,sender-ip:,receiver-ip:,port:,mtu:,bitrate:,help" \
+        -l "source:,sender-ip:,receiver-ip:,port:,mtu:,bitrate:,skip-reachability-check,help" \
         -- "$@"); then
         usage 1
     fi
@@ -45,6 +47,7 @@ function parse_arguments() {
             -p|--port) PORT=$2; shift 2 ;;
             -m|--mtu) MTU=$2; shift 2 ;;
             -b|--bitrate) BITRATE=$2; shift 2 ;;
+            --skip-reachability-check) SKIP_REACHABILITY_CHECK=1; shift ;;
             -h|--help) usage 0 ;;
             --) shift; break ;;
         esac
@@ -85,7 +88,11 @@ function validate_parameters() {
 function check_dependencies() {
     local command
 
-    for command in getopt pactl ip awk ping gst-launch-1.0 gst-inspect-1.0; do
+    local -a commands=(getopt pactl ip awk gst-launch-1.0 gst-inspect-1.0)
+    if (( SKIP_REACHABILITY_CHECK == 0 )); then
+        commands+=(ping)
+    fi
+    for command in "${commands[@]}"; do
         if ! command -v "$command" >/dev/null 2>&1; then
             echo "Error: '$command' is not installed." >&2
             exit 1
@@ -131,7 +138,11 @@ function resolve_sender_ip() {
 }
 
 function check_remote_reachability() {
-    check_ip_reachable "$SOURCE_IP" "$DESTINATION_IP"
+    if (( SKIP_REACHABILITY_CHECK )); then
+        echo "Skipping ICMP reachability check."
+    else
+        check_ip_reachable "$SOURCE_IP" "$DESTINATION_IP"
+    fi
 }
 
 function check_capture_source() {

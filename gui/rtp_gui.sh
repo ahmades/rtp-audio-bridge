@@ -109,7 +109,7 @@ function choose_mode() {
 
 function sender_form() {
     local sources form_data
-    load_defaults "$CONFIG_DIR/sender.defaults" "" "" "" "4010" "1200" "64000"
+    load_defaults "$CONFIG_DIR/sender.defaults" "" "" "" "4010" "1200" "64000" "FALSE"
     sources="$(pactl list short sources | combo_values "" "${FORM_DEFAULTS[0]}")"
     if [[ -z "$sources" ]]; then
         show_error "No PulseAudio/PipeWire sources are available."
@@ -125,24 +125,26 @@ function sender_form() {
         --field="Port" "${FORM_DEFAULTS[3]}" \
         --field="RTP MTU" "${FORM_DEFAULTS[4]}" \
         --field="Opus bitrate (bits/s)" "${FORM_DEFAULTS[5]}" \
-        --width=520 --height=300 \
+        --field="Skip ping reachability check:CHK" "${FORM_DEFAULTS[6]}" \
+        --width=540 --height=340 \
         --button=Cancel:1 --button=Start:0); then
         return 1
     fi
 
-    local source sender_ip receiver_ip port mtu bitrate
-    IFS='|' read -r source sender_ip receiver_ip port mtu bitrate <<< "$form_data"
-    save_defaults "$CONFIG_DIR/sender.defaults" "$source" "$sender_ip" "$receiver_ip" "$port" "$mtu" "$bitrate" || true
+    local source sender_ip receiver_ip port mtu bitrate skip_ping
+    IFS='|' read -r source sender_ip receiver_ip port mtu bitrate skip_ping <<< "$form_data"
+    save_defaults "$CONFIG_DIR/sender.defaults" "$source" "$sender_ip" "$receiver_ip" "$port" "$mtu" "$bitrate" "$skip_ping" || true
     local -a args=(--source "$source" --receiver-ip "$receiver_ip" --port "$port" --mtu "$mtu" --bitrate "$bitrate")
     if [[ -n "$sender_ip" ]]; then
         args+=(--sender-ip "$sender_ip")
     fi
+    [[ "${skip_ping^^}" != TRUE ]] || args+=(--skip-reachability-check)
     run_session "Sender" "$SENDER" "${args[@]}"
 }
 
 function receiver_form() {
     local sinks form_data
-    load_defaults "$CONFIG_DIR/receiver.defaults" "4010" "" "" "None" "200" "50"
+    load_defaults "$CONFIG_DIR/receiver.defaults" "4010" "" "" "None" "200" "50" "" "FALSE"
     sinks="$(pactl list short sinks | combo_values "None" "${FORM_DEFAULTS[3]}")"
 
     if ! form_data=$(yad --form \
@@ -154,18 +156,22 @@ function receiver_form() {
         --field="Playback sink:CB" "$sinks" \
         --field="Jitter buffer (ms)" "${FORM_DEFAULTS[4]}" \
         --field="Loopback latency (ms)" "${FORM_DEFAULTS[5]}" \
-        --width=520 --height=300 \
+        --field="Receiver source name (optional)" "${FORM_DEFAULTS[6]}" \
+        --field="Skip ping reachability check:CHK" "${FORM_DEFAULTS[7]}" \
+        --width=560 --height=360 \
         --button=Cancel:1 --button=Start:0); then
         return 1
     fi
 
-    local port receiver_ip sender_ip sink jitter loopback
-    IFS='|' read -r port receiver_ip sender_ip sink jitter loopback <<< "$form_data"
-    save_defaults "$CONFIG_DIR/receiver.defaults" "$port" "$receiver_ip" "$sender_ip" "$sink" "$jitter" "$loopback" || true
+    local port receiver_ip sender_ip sink jitter loopback source_name skip_ping
+    IFS='|' read -r port receiver_ip sender_ip sink jitter loopback source_name skip_ping <<< "$form_data"
+    save_defaults "$CONFIG_DIR/receiver.defaults" "$port" "$receiver_ip" "$sender_ip" "$sink" "$jitter" "$loopback" "$source_name" "$skip_ping" || true
     local -a args=(--port "$port" --jitter "$jitter" --loopback "$loopback")
     [[ -z "$receiver_ip" ]] || args+=(--receiver-ip "$receiver_ip")
     [[ -z "$sender_ip" ]] || args+=(--sender-ip "$sender_ip")
+    [[ -z "$source_name" ]] || args+=(--source-name "$source_name")
     [[ "$sink" == "None" || -z "$sink" ]] || args+=(--playback-sink "$sink")
+    [[ "${skip_ping^^}" != TRUE ]] || args+=(--skip-reachability-check)
     run_session "Receiver" "$RECEIVER" "${args[@]}"
 }
 
