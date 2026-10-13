@@ -8,6 +8,9 @@ SENDER="$SRC_DIR/rtp_send.sh"
 RECEIVER="$SRC_DIR/rtp_receive.sh"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rtp-audio"
 FORM_DEFAULTS=()
+ACTIVE_SESSION_PID=""
+ACTIVE_VIEWER_PID=""
+ACTIVE_TAIL_PID=""
 
 function show_error() {
     if ! yad --text-info \
@@ -105,7 +108,7 @@ function choose_mode() {
         TRUE Send FALSE Receive \
         --print-column=2 \
         --width=320 --height=140 \
-        --button=Cancel:1 --button=Continue:0
+        --button=Next:0 --button=Cancel:1
 }
 
 function sender_form() {
@@ -264,6 +267,30 @@ function stop_session_process() {
         kill -TERM "$process_id" 2>/dev/null || true
     fi
     wait "$process_id" 2>/dev/null || true
+    if [[ "$ACTIVE_SESSION_PID" == "$process_id" ]]; then
+        ACTIVE_SESSION_PID=""
+    fi
+}
+
+function cleanup_gui_processes() {
+    trap - EXIT INT TERM
+
+    local session_pid=$ACTIVE_SESSION_PID
+    local viewer_pid=$ACTIVE_VIEWER_PID
+    local tail_pid=$ACTIVE_TAIL_PID
+    local process_id
+    ACTIVE_SESSION_PID=""
+    ACTIVE_VIEWER_PID=""
+    ACTIVE_TAIL_PID=""
+
+    for process_id in "$viewer_pid" "$tail_pid" "$session_pid"; do
+        [[ -n "$process_id" ]] || continue
+        kill -TERM "$process_id" 2>/dev/null || true
+    done
+    for process_id in "$viewer_pid" "$tail_pid" "$session_pid"; do
+        [[ -n "$process_id" ]] || continue
+        wait "$process_id" 2>/dev/null || true
+    done
 }
 
 function run_session() {
@@ -281,6 +308,7 @@ function run_session() {
 
     run_session_process "$script" "$log_file" "$done_file" "$@" &
     process_id=$!
+    ACTIVE_SESSION_PID=$process_id
 
     while true; do
         local -a buttons=(--button="Copy log:2" --button="Save log:3" --button="Close:1")
@@ -295,15 +323,20 @@ function run_session() {
             --width=760 --height=440 \
             "${buttons[@]}" < "$live_fifo" &
         viewer_id=$!
+        ACTIVE_VIEWER_PID=$viewer_id
         tail -n +1 -f "$log_file" > "$live_fifo" &
         tail_id=$!
+        ACTIVE_TAIL_PID=$tail_id
 
         while kill -0 "$viewer_id" 2>/dev/null; do
             if [[ -f "$done_file" && $finished -eq 0 ]]; then
                 finished=1
                 kill "$tail_id" 2>/dev/null || true
                 wait "$tail_id" 2>/dev/null || true
+                ACTIVE_TAIL_PID=""
                 tail_id=""
+                wait "$process_id" 2>/dev/null || true
+                ACTIVE_SESSION_PID=""
             fi
             sleep 0.1
         done
@@ -313,9 +346,11 @@ function run_session() {
         else
             dialog_status=$?
         fi
+        ACTIVE_VIEWER_PID=""
         if [[ -n "$tail_id" ]]; then
             kill "$tail_id" 2>/dev/null || true
             wait "$tail_id" 2>/dev/null || true
+            ACTIVE_TAIL_PID=""
         fi
 
         case "$dialog_status" in
@@ -342,6 +377,9 @@ function run_session() {
 
 function main() {
     require_dependencies
+    trap cleanup_gui_processes EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     local mode form_status
     while true; do
