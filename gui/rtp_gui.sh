@@ -100,10 +100,11 @@ function choose_mode() {
         --title="RTP Audio" \
         --text="Choose an operation" \
         --radiolist \
-        --column="" --column="Mode" \
-        TRUE Sender FALSE Receiver \
+        --column="" --column="" \
+        --no-headers --no-click \
+        TRUE Send FALSE Receive \
         --print-column=2 \
-        --width=320 --height=180 \
+        --width=320 --height=140 \
         --button=Cancel:1 --button=Continue:0
 }
 
@@ -116,7 +117,7 @@ function sender_form() {
         return 1
     fi
 
-    if ! form_data=$(yad --form \
+    if form_data=$(yad --form \
         --title="RTP Audio Sender" \
         --text="Send Opus audio over RTP" \
         --field="Capture source:CB" "$sources" \
@@ -125,11 +126,13 @@ function sender_form() {
         --field="Port" "${FORM_DEFAULTS[3]}" \
         --field="RTP MTU" "${FORM_DEFAULTS[4]}" \
         --field="Opus bitrate (bits/s)" "${FORM_DEFAULTS[5]}" \
-        --field="Skip ping reachability check:CHK" "${FORM_DEFAULTS[6]}" \
-        --field="GStreamer diagnostics:CHK" "${FORM_DEFAULTS[7]}" \
+        --field="Skip reachability check:SW" "${FORM_DEFAULTS[6]}" \
+        --field="Print diagnostics:SW" "${FORM_DEFAULTS[7]}" \
         --width=540 --height=380 \
-        --button=Cancel:1 --button=Start:0); then
-        return 1
+        --button=Back:2 --button=Start:0 --button=Cancel:1); then
+        :
+    else
+        return "$?"
     fi
 
     local source sender_ip receiver_ip port mtu bitrate skip_ping diagnostics
@@ -147,9 +150,10 @@ function sender_form() {
 function receiver_form() {
     local sinks form_data
     load_defaults "$CONFIG_DIR/receiver.defaults" "4010" "" "" "None" "200" "50" "" "FALSE" "50" "5" "FALSE" "FALSE"
+    FORM_DEFAULTS=("${FORM_DEFAULTS[@]:0:7}" "${FORM_DEFAULTS[8]}" "${FORM_DEFAULTS[9]}" "${FORM_DEFAULTS[7]}" "${FORM_DEFAULTS[@]:10}")
     sinks="$(pactl list short sinks | combo_values "None" "${FORM_DEFAULTS[3]}")"
 
-    if ! form_data=$(yad --form \
+    if form_data=$(yad --form \
         --title="RTP Audio Receiver" \
         --text="Receive and decode Opus RTP audio" \
         --field="Port" "${FORM_DEFAULTS[0]}" \
@@ -159,18 +163,20 @@ function receiver_form() {
         --field="Jitter buffer (ms)" "${FORM_DEFAULTS[4]}" \
         --field="Loopback latency (ms)" "${FORM_DEFAULTS[5]}" \
         --field="Receiver source name (optional)" "${FORM_DEFAULTS[6]}" \
-        --field="Skip ping reachability check:CHK" "${FORM_DEFAULTS[7]}" \
-        --field="PulseAudio sink buffer (ms)" "${FORM_DEFAULTS[8]}" \
-        --field="PulseAudio sink write latency (ms)" "${FORM_DEFAULTS[9]}" \
-        --field="GStreamer diagnostics:CHK" "${FORM_DEFAULTS[10]}" \
-        --field="Keep late packets (disable latency drop):CHK" "${FORM_DEFAULTS[11]}" \
+        --field="PulseAudio sink buffer (ms)" "${FORM_DEFAULTS[7]}" \
+        --field="PulseAudio sink write latency (ms)" "${FORM_DEFAULTS[8]}" \
+        --field="Skip reachability check:SW" "${FORM_DEFAULTS[9]}" \
+        --field="Print diagnostics:SW" "${FORM_DEFAULTS[10]}" \
+        --field="Keep late packets (disable latency drop):SW" "${FORM_DEFAULTS[11]}" \
         --width=560 --height=500 \
-        --button=Cancel:1 --button=Start:0); then
-        return 1
+        --button=Back:2 --button=Start:0 --button=Cancel:1); then
+        :
+    else
+        return "$?"
     fi
 
     local port receiver_ip sender_ip sink jitter loopback source_name skip_ping sink_buffer sink_latency diagnostics no_drop_on_latency
-    IFS='|' read -r port receiver_ip sender_ip sink jitter loopback source_name skip_ping sink_buffer sink_latency diagnostics no_drop_on_latency <<< "$form_data"
+    IFS='|' read -r port receiver_ip sender_ip sink jitter loopback source_name sink_buffer sink_latency skip_ping diagnostics no_drop_on_latency <<< "$form_data"
     save_defaults "$CONFIG_DIR/receiver.defaults" "$port" "$receiver_ip" "$sender_ip" "$sink" "$jitter" "$loopback" "$source_name" "$skip_ping" "$sink_buffer" "$sink_latency" "$diagnostics" "$no_drop_on_latency" || true
     local -a args=(--port "$port" --jitter "$jitter" --loopback "$loopback" --sink-buffer "$sink_buffer" --sink-latency "$sink_latency")
     [[ -z "$receiver_ip" ]] || args+=(--receiver-ip "$receiver_ip")
@@ -337,23 +343,31 @@ function run_session() {
 function main() {
     require_dependencies
 
-    local mode
-    if ! mode=$(choose_mode); then
-        exit 0
-    fi
-    mode=${mode//$'\r'/}
-    while [[ "$mode" == *'|' ]]; do
-        mode=${mode%|}
-    done
-    mode=${mode##*|}
-    mode="${mode#"${mode%%[![:space:]]*}"}"
-    mode="${mode%"${mode##*[![:space:]]}"}"
+    local mode form_status
+    while true; do
+        if ! mode=$(choose_mode); then
+            exit 0
+        fi
+        mode=${mode//$'\r'/}
+        while [[ "$mode" == *'|' ]]; do
+            mode=${mode%|}
+        done
+        mode=${mode##*|}
+        mode="${mode#"${mode%%[![:space:]]*}"}"
+        mode="${mode%"${mode##*[![:space:]]}"}"
 
-    case "$mode" in
-        Sender) sender_form || true ;;
-        Receiver) receiver_form || true ;;
-        *) show_error "Unrecognized mode selection: '$mode'. Choose Sender or Receiver."; exit 1 ;;
-    esac
+        case "$mode" in
+            Send)
+                if sender_form; then form_status=0; else form_status=$?; fi
+                ;;
+            Receive)
+                if receiver_form; then form_status=0; else form_status=$?; fi
+                ;;
+            *) show_error "Unrecognized mode selection: '$mode'. Choose Send or Receive."; exit 1 ;;
+        esac
+
+        (( form_status == 2 )) || break
+    done
 }
 
 main "$@"
